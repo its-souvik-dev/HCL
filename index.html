@@ -14,7 +14,8 @@
         button:active { transform: scale(0.95); background-color: #45a049; }
         
         .controls { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; display: none; width: 100%; max-width: 400px; margin-top: 20px; }
-        .run-btn { background-color: #2c2c2c; border: 2px solid #4CAF50; margin: 0; padding: 20px 0; font-size: 1.5rem; }
+        .run-btn { background-color: #2c2c2c; border: 2px solid #4CAF50; margin: 0; padding: 20px 0; font-size: 1.5rem; border-radius: 8px; }
+        .zero-btn { grid-column: span 3; background-color: #1a1a1a; border-color: #FFC107; } /* Make 0 button big at the bottom */
         
         #restart-btn { background-color: #f44336; display: none; margin-top: 20px; }
         #restart-btn:active { background-color: #d32f2f; }
@@ -81,6 +82,7 @@
             <button class="run-btn" onclick="playMove(4)">🖖</button>
             <button class="run-btn" onclick="playMove(5)">🖐️</button>
             <button class="run-btn" onclick="playMove(6)">👍</button>
+            <button class="run-btn zero-btn" onclick="playMove(0)">✊ 0 (Defend)</button>
         </div>
 
         <button id="restart-btn" onclick="triggerRestart()">Play Again</button>
@@ -98,8 +100,9 @@
         let joinerScore = 0;
         let target = null;
         let isHostBatting = true;
+        let winnerWasHost = true; // By default, host bats first in Game 1
 
-        const handEmojis = { 1: "☝️", 2: "✌️", 3: "🤟", 4: "🖖", 5: "🖐️", 6: "👍" };
+        const handEmojis = { 0: "✊", 1: "☝️", 2: "✌️", 3: "🤟", 4: "🖖", 5: "🖐️", 6: "👍" };
 
         const ui = {
             lobby: document.getElementById('lobby-panel'),
@@ -107,7 +110,7 @@
             lobbyMsg: document.getElementById('lobby-msg'),
             status: document.getElementById('status-msg'),
             controls: document.getElementById('controls'),
-            restartBtn: document.getElementById('restart-btn'), // Added UI element
+            restartBtn: document.getElementById('restart-btn'),
             roomDisp: document.getElementById('room-display'),
             myHand: document.getElementById('my-hand'),
             oppHand: document.getElementById('opp-hand'),
@@ -142,7 +145,7 @@
             peer.on('connection', (connection) => {
                 conn = connection;
                 setupConnection();
-                ui.status.innerText = "Friend joined! You are batting first. Play a shot.";
+                ui.status.innerText = "Friend joined! You are batting first.";
                 ui.controls.style.display = 'grid';
             });
 
@@ -164,7 +167,7 @@
                     ui.lobby.style.display = 'none';
                     ui.game.style.display = 'block';
                     ui.roomDisp.innerText = code;
-                    ui.status.innerText = "Connected! Opponent is batting. Bowl a number.";
+                    ui.status.innerText = "Connected! Opponent is batting.";
                     ui.controls.style.display = 'grid';
                 });
             });
@@ -184,7 +187,6 @@
                 } else if (data.type === 'RESULT') {
                     applyResult(data);
                 } else if (data.type === 'RESTART') {
-                    // When the other player clicks Restart
                     resetGameUI(); 
                 }
             });
@@ -217,34 +219,65 @@
 
             let msg = "";
             let gameOver = false;
+            let hostWon = null;
 
+            // OUT CONDITION
             if (hostMove === joinerMove) {
-                if (isHostBatting) {
+                // First Innings
+                if (isHostBatting && target === null) {
                     isHostBatting = false;
                     target = hostScore + 1;
                     msg = `OUT! Host scored ${hostScore}. Target is ${target}.`;
-                } else {
+                } else if (!isHostBatting && target === null) {
+                    isHostBatting = true;
+                    target = joinerScore + 1;
+                    msg = `OUT! Joiner scored ${joinerScore}. Target is ${target}.`;
+                } 
+                // Second Innings
+                else if (isHostBatting && target !== null) {
+                    msg = `OUT! Host is out. JOINER WINS! 🎉`;
+                    gameOver = true;
+                    hostWon = false;
+                } else if (!isHostBatting && target !== null) {
                     msg = `OUT! Joiner is out. HOST WINS! 🎉`;
                     gameOver = true;
+                    hostWon = true;
                 }
-            } else {
+            } 
+            // NOT OUT CONDITION
+            else {
+                let runsScored = 0;
                 if (isHostBatting) {
-                    hostScore += hostMove;
-                    msg = `Host scored ${hostMove}. Total: ${hostScore}`;
+                    // Special 0 Rule: If batter plays 0, they score the bowler's runs
+                    runsScored = (hostMove === 0) ? joinerMove : hostMove;
+                    hostScore += runsScored;
+                    
+                    if (target !== null && hostScore >= target) {
+                        msg = `Host chased it! HOST WINS! 🎉`;
+                        gameOver = true;
+                        hostWon = true;
+                    } else {
+                        msg = `Host scored ${runsScored}. Total: ${hostScore}`;
+                    }
                 } else {
-                    joinerScore += joinerMove;
-                    if (joinerScore >= target) {
+                    // Special 0 Rule
+                    runsScored = (joinerMove === 0) ? hostMove : joinerMove;
+                    joinerScore += runsScored;
+                    
+                    if (target !== null && joinerScore >= target) {
                         msg = `Joiner chased it! JOINER WINS! 🎉`;
                         gameOver = true;
+                        hostWon = false;
                     } else {
-                        msg = `Joiner scored ${joinerMove}. Needs ${target - joinerScore}.`;
+                        msg = `Joiner scored ${runsScored}. Total: ${joinerScore}`;
                     }
                 }
             }
 
             const resultData = {
                 type: 'RESULT', hMove: hostMove, jMove: joinerMove, hScore: hostScore,
-                jScore: joinerScore, target: target, msg: msg, gameOver: gameOver
+                jScore: joinerScore, target: target, msg: msg, gameOver: gameOver,
+                hostWon: hostWon
             };
 
             applyResult(resultData);
@@ -265,7 +298,10 @@
             ui.status.innerText = data.msg;
 
             if (data.gameOver) {
-                // Show Restart button when game ends
+                // Save who won so they bat first next time
+                winnerWasHost = data.hostWon;
+                isHostBatting = winnerWasHost;
+                
                 ui.controls.style.display = 'none';
                 ui.restartBtn.style.display = 'block'; 
             } else {
@@ -281,24 +317,22 @@
         // --- RESTART LOGIC ---
 
         function triggerRestart() {
-            // Send signal to the other player
             conn.send({ type: 'RESTART' });
-            // Reset our own screen
             resetGameUI();
         }
 
         function resetGameUI() {
-            // Reset Host Truth Variables
             if (isHost) {
                 hostScore = 0;
                 joinerScore = 0;
                 target = null;
-                isHostBatting = true;
+                isHostBatting = winnerWasHost; // Winner gets to bat!
                 hostMove = null;
                 joinerMove = null;
+            } else {
+                isHostBatting = winnerWasHost; // Both phones agree on who bats
             }
 
-            // Reset UI for both
             ui.myScore.innerText = "0";
             ui.oppScore.innerText = "0";
             ui.targetDisp.innerText = "-";
@@ -308,9 +342,16 @@
             ui.restartBtn.style.display = 'none';
             ui.controls.style.display = 'grid';
 
-            ui.status.innerText = isHost 
-                ? "New Game! You are batting first." 
-                : "New Game! Opponent is batting first.";
+            // Check if THIS specific player is the one batting
+            const amIBatting = (isHost && winnerWasHost) || (!isHost && !winnerWasHost);
+
+            if (amIBatting) {
+                ui.status.innerText = "New Match! You won the last game, so YOU ARE BATTING.";
+                ui.status.style.color = "#4CAF50";
+            } else {
+                ui.status.innerText = "New Match! Opponent won the last game. YOU ARE BOWLING.";
+                ui.status.style.color = "#FFC107";
+            }
         }
     </script>
 </body>
