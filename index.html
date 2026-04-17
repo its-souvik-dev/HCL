@@ -12,8 +12,13 @@
         input { padding: 15px; font-size: 1.5rem; width: 100%; margin-bottom: 15px; border-radius: 8px; border: 2px solid #333; background: #222; color: #fff; text-align: center; text-transform: uppercase; box-sizing: border-box; letter-spacing: 2px; }
         button { background-color: #4CAF50; color: white; border: none; padding: 15px; font-size: 1.2rem; border-radius: 8px; cursor: pointer; width: 100%; font-weight: bold; transition: 0.2s; margin-bottom: 15px; }
         button:active { transform: scale(0.95); background-color: #45a049; }
+        
         .controls { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; display: none; width: 100%; max-width: 400px; margin-top: 20px; }
         .run-btn { background-color: #2c2c2c; border: 2px solid #4CAF50; margin: 0; padding: 20px 0; font-size: 1.5rem; }
+        
+        #restart-btn { background-color: #f44336; display: none; margin-top: 20px; }
+        #restart-btn:active { background-color: #d32f2f; }
+
         .arena { display: flex; justify-content: space-around; align-items: center; font-size: 4rem; margin: 20px 0; background: #222; padding: 20px; border-radius: 12px; }
         #game-panel { display: none; width: 100%; max-width: 400px; }
         .scoreboard { display: flex; justify-content: space-between; background: #333; padding: 15px; border-radius: 8px; margin-bottom: 15px; }
@@ -77,6 +82,8 @@
             <button class="run-btn" onclick="playMove(5)">🖐️</button>
             <button class="run-btn" onclick="playMove(6)">👍</button>
         </div>
+
+        <button id="restart-btn" onclick="triggerRestart()">Play Again</button>
     </div>
 
     <script>
@@ -84,7 +91,7 @@
         let conn = null;
         let isHost = false;
         
-        // Game State (Host is the referee)
+        // Game State
         let hostMove = null;
         let joinerMove = null;
         let hostScore = 0;
@@ -100,6 +107,7 @@
             lobbyMsg: document.getElementById('lobby-msg'),
             status: document.getElementById('status-msg'),
             controls: document.getElementById('controls'),
+            restartBtn: document.getElementById('restart-btn'), // Added UI element
             roomDisp: document.getElementById('room-display'),
             myHand: document.getElementById('my-hand'),
             oppHand: document.getElementById('opp-hand'),
@@ -121,7 +129,6 @@
             ui.lobbyMsg.innerText = "Creating room...";
             const roomCode = generateCode();
             
-            // Connect to PeerJS public server using a unique ID
             peer = new Peer('hcrick-' + roomCode); 
 
             peer.on('open', (id) => {
@@ -170,15 +177,22 @@
                 if (data.type === 'MOVE') {
                     if (isHost) {
                         joinerMove = data.run;
-                        checkRound(); // Host checks logic
+                        checkRound(); 
                     } else {
                         hostMove = data.run;
                     }
                 } else if (data.type === 'RESULT') {
                     applyResult(data);
+                } else if (data.type === 'RESTART') {
+                    // When the other player clicks Restart
+                    resetGameUI(); 
                 }
             });
-            conn.on('close', () => { ui.status.innerText = "Opponent disconnected!"; ui.controls.style.display = 'none'; });
+            conn.on('close', () => { 
+                ui.status.innerText = "Opponent disconnected!"; 
+                ui.controls.style.display = 'none'; 
+                ui.restartBtn.style.display = 'none';
+            });
         }
 
         // --- GAMEPLAY LOGIC ---
@@ -187,7 +201,7 @@
             ui.controls.style.display = 'none';
             ui.status.innerText = "Waiting for opponent...";
             ui.myHand.innerText = handEmojis[run];
-            ui.oppHand.innerText = "🤔"; // Hide their move until both picked
+            ui.oppHand.innerText = "🤔"; 
 
             if (isHost) {
                 hostMove = run;
@@ -198,14 +212,12 @@
             }
         }
 
-        // Only the Host runs this function to act as the fair referee
         function checkRound() {
             if (hostMove === null || joinerMove === null) return;
 
             let msg = "";
             let gameOver = false;
 
-            // OUT!
             if (hostMove === joinerMove) {
                 if (isHostBatting) {
                     isHostBatting = false;
@@ -215,9 +227,7 @@
                     msg = `OUT! Joiner is out. HOST WINS! 🎉`;
                     gameOver = true;
                 }
-            } 
-            // NOT OUT
-            else {
+            } else {
                 if (isHostBatting) {
                     hostScore += hostMove;
                     msg = `Host scored ${hostMove}. Total: ${hostScore}`;
@@ -233,21 +243,13 @@
             }
 
             const resultData = {
-                type: 'RESULT',
-                hMove: hostMove,
-                jMove: joinerMove,
-                hScore: hostScore,
-                jScore: joinerScore,
-                target: target,
-                msg: msg,
-                gameOver: gameOver
+                type: 'RESULT', hMove: hostMove, jMove: joinerMove, hScore: hostScore,
+                jScore: joinerScore, target: target, msg: msg, gameOver: gameOver
             };
 
-            // Apply to host immediately, send to joiner
             applyResult(resultData);
             conn.send(resultData);
 
-            // Reset moves
             hostMove = null;
             joinerMove = null;
         }
@@ -262,14 +264,53 @@
 
             ui.status.innerText = data.msg;
 
-            if (!data.gameOver) {
+            if (data.gameOver) {
+                // Show Restart button when game ends
+                ui.controls.style.display = 'none';
+                ui.restartBtn.style.display = 'block'; 
+            } else {
                 setTimeout(() => {
                     ui.status.innerText = "Next ball! Pick a number.";
                     ui.myHand.innerText = "✊";
                     ui.oppHand.innerText = "✊";
                     ui.controls.style.display = 'grid';
-                }, 2500); // 2.5 second pause between balls
+                }, 2500); 
             }
+        }
+
+        // --- RESTART LOGIC ---
+
+        function triggerRestart() {
+            // Send signal to the other player
+            conn.send({ type: 'RESTART' });
+            // Reset our own screen
+            resetGameUI();
+        }
+
+        function resetGameUI() {
+            // Reset Host Truth Variables
+            if (isHost) {
+                hostScore = 0;
+                joinerScore = 0;
+                target = null;
+                isHostBatting = true;
+                hostMove = null;
+                joinerMove = null;
+            }
+
+            // Reset UI for both
+            ui.myScore.innerText = "0";
+            ui.oppScore.innerText = "0";
+            ui.targetDisp.innerText = "-";
+            ui.myHand.innerText = "✊";
+            ui.oppHand.innerText = "✊";
+            
+            ui.restartBtn.style.display = 'none';
+            ui.controls.style.display = 'grid';
+
+            ui.status.innerText = isHost 
+                ? "New Game! You are batting first." 
+                : "New Game! Opponent is batting first.";
         }
     </script>
 </body>
