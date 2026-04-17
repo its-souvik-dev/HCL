@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, maximum-scale=1.0, user-scalable=no">
+    <title>Hand Cricket P2P</title>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background: #121212; color: #fff; display: flex; flex-direction: column; align-items: center; padding: 20px; text-align: center; margin: 0; }
+        h1 { color: #4CAF50; margin-bottom: 10px; }
+        .panel { background: #1e1e1e; padding: 25px; border-radius: 12px; width: 100%; max-width: 400px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); }
+        input { padding: 15px; font-size: 1.5rem; width: 100%; margin-bottom: 15px; border-radius: 8px; border: 2px solid #333; background: #222; color: #fff; text-align: center; text-transform: uppercase; box-sizing: border-box; letter-spacing: 2px; }
+        button { background-color: #4CAF50; color: white; border: none; padding: 15px; font-size: 1.2rem; border-radius: 8px; cursor: pointer; width: 100%; font-weight: bold; transition: 0.2s; margin-bottom: 15px; }
+        button:active { transform: scale(0.95); background-color: #45a049; }
+        .controls { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; display: none; width: 100%; max-width: 400px; margin-top: 20px; }
+        .run-btn { background-color: #2c2c2c; border: 2px solid #4CAF50; margin: 0; padding: 20px 0; font-size: 1.5rem; }
+        .arena { display: flex; justify-content: space-around; align-items: center; font-size: 4rem; margin: 20px 0; background: #222; padding: 20px; border-radius: 12px; }
+        #game-panel { display: none; width: 100%; max-width: 400px; }
+        .scoreboard { display: flex; justify-content: space-between; background: #333; padding: 15px; border-radius: 8px; margin-bottom: 15px; }
+        .score-box h3 { font-size: 0.9rem; color: #aaa; margin: 0 0 5px 0; }
+        .score-box p { font-size: 1.5rem; margin: 0; font-weight: bold; }
+        #status-msg { color: #FFC107; font-size: 1.2rem; font-weight: bold; height: 50px; margin-bottom: 10px; }
+        .label { font-size: 1rem; color: #aaa; }
+    </style>
+</head>
+<body>
+
+    <h1>Hand Cricket VS</h1>
+
+    <div class="panel" id="lobby-panel">
+        <button onclick="createRoom()">Create Room (Host)</button>
+        <p style="margin: 20px 0; color: #aaa;">— OR JOIN A FRIEND —</p>
+        <input type="text" id="room-code" placeholder="4-LETTER CODE" maxlength="4">
+        <button onclick="joinRoom()" style="background-color: #2196F3;">Join Room</button>
+        <p id="lobby-msg" style="color: #FFC107; font-weight: bold; margin-top: 15px;"></p>
+    </div>
+
+    <div id="game-panel">
+        <div style="background: #2196F3; padding: 10px; border-radius: 8px; margin-bottom: 15px; font-weight: bold;">
+            Room Code: <span id="room-display" style="letter-spacing: 2px;">---</span>
+        </div>
+
+        <p id="status-msg">Waiting for opponent...</p>
+
+        <div class="scoreboard">
+            <div class="score-box">
+                <h3>YOUR SCORE</h3>
+                <p id="my-score">0</p>
+            </div>
+            <div class="score-box">
+                <h3>TARGET</h3>
+                <p id="target-display" style="color: #FF5722;">-</p>
+            </div>
+            <div class="score-box">
+                <h3>THEIR SCORE</h3>
+                <p id="opp-score">0</p>
+            </div>
+        </div>
+
+        <div class="arena">
+            <div>
+                <div class="label">YOU</div>
+                <span id="my-hand">✊</span>
+            </div>
+            <span style="font-size: 2rem; color: #555;">VS</span>
+            <div>
+                <div class="label">THEM</div>
+                <span id="opp-hand">✊</span>
+            </div>
+        </div>
+
+        <div class="controls" id="controls">
+            <button class="run-btn" onclick="playMove(1)">☝️</button>
+            <button class="run-btn" onclick="playMove(2)">✌️</button>
+            <button class="run-btn" onclick="playMove(3)">🤟</button>
+            <button class="run-btn" onclick="playMove(4)">🖖</button>
+            <button class="run-btn" onclick="playMove(5)">🖐️</button>
+            <button class="run-btn" onclick="playMove(6)">👍</button>
+        </div>
+    </div>
+
+    <script>
+        let peer = null;
+        let conn = null;
+        let isHost = false;
+        
+        // Game State (Host is the referee)
+        let hostMove = null;
+        let joinerMove = null;
+        let hostScore = 0;
+        let joinerScore = 0;
+        let target = null;
+        let isHostBatting = true;
+
+        const handEmojis = { 1: "☝️", 2: "✌️", 3: "🤟", 4: "🖖", 5: "🖐️", 6: "👍" };
+
+        const ui = {
+            lobby: document.getElementById('lobby-panel'),
+            game: document.getElementById('game-panel'),
+            lobbyMsg: document.getElementById('lobby-msg'),
+            status: document.getElementById('status-msg'),
+            controls: document.getElementById('controls'),
+            roomDisp: document.getElementById('room-display'),
+            myHand: document.getElementById('my-hand'),
+            oppHand: document.getElementById('opp-hand'),
+            myScore: document.getElementById('my-score'),
+            oppScore: document.getElementById('opp-score'),
+            targetDisp: document.getElementById('target-display')
+        };
+
+        // --- MULTIPLAYER SETUP ---
+
+        function generateCode() {
+            const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+            let result = '';
+            for (let i = 0; i < 4; i++) result += chars.charAt(Math.floor(Math.random() * chars.length));
+            return result;
+        }
+
+        function createRoom() {
+            ui.lobbyMsg.innerText = "Creating room...";
+            const roomCode = generateCode();
+            
+            // Connect to PeerJS public server using a unique ID
+            peer = new Peer('hcrick-' + roomCode); 
+
+            peer.on('open', (id) => {
+                isHost = true;
+                ui.lobby.style.display = 'none';
+                ui.game.style.display = 'block';
+                ui.roomDisp.innerText = roomCode;
+                ui.status.innerText = "Share code with friend. Waiting...";
+            });
+
+            peer.on('connection', (connection) => {
+                conn = connection;
+                setupConnection();
+                ui.status.innerText = "Friend joined! You are batting first. Play a shot.";
+                ui.controls.style.display = 'grid';
+            });
+
+            peer.on('error', (err) => { ui.lobbyMsg.innerText = "Error creating room. Try again."; });
+        }
+
+        function joinRoom() {
+            const code = document.getElementById('room-code').value.toUpperCase();
+            if (code.length !== 4) return alert("Enter a 4-letter code!");
+            
+            ui.lobbyMsg.innerText = "Connecting...";
+            peer = new Peer();
+            
+            peer.on('open', () => {
+                conn = peer.connect('hcrick-' + code);
+                conn.on('open', () => {
+                    isHost = false;
+                    setupConnection();
+                    ui.lobby.style.display = 'none';
+                    ui.game.style.display = 'block';
+                    ui.roomDisp.innerText = code;
+                    ui.status.innerText = "Connected! Opponent is batting. Bowl a number.";
+                    ui.controls.style.display = 'grid';
+                });
+            });
+
+            peer.on('error', (err) => { ui.lobbyMsg.innerText = "Room not found!"; });
+        }
+
+        function setupConnection() {
+            conn.on('data', (data) => {
+                if (data.type === 'MOVE') {
+                    if (isHost) {
+                        joinerMove = data.run;
+                        checkRound(); // Host checks logic
+                    } else {
+                        hostMove = data.run;
+                    }
+                } else if (data.type === 'RESULT') {
+                    applyResult(data);
+                }
+            });
+            conn.on('close', () => { ui.status.innerText = "Opponent disconnected!"; ui.controls.style.display = 'none'; });
+        }
+
+        // --- GAMEPLAY LOGIC ---
+
+        function playMove(run) {
+            ui.controls.style.display = 'none';
+            ui.status.innerText = "Waiting for opponent...";
+            ui.myHand.innerText = handEmojis[run];
+            ui.oppHand.innerText = "🤔"; // Hide their move until both picked
+
+            if (isHost) {
+                hostMove = run;
+                checkRound();
+            } else {
+                joinerMove = run;
+                conn.send({ type: 'MOVE', run: run });
+            }
+        }
+
+        // Only the Host runs this function to act as the fair referee
+        function checkRound() {
+            if (hostMove === null || joinerMove === null) return;
+
+            let msg = "";
+            let gameOver = false;
+
+            // OUT!
+            if (hostMove === joinerMove) {
+                if (isHostBatting) {
+                    isHostBatting = false;
+                    target = hostScore + 1;
+                    msg = `OUT! Host scored ${hostScore}. Target is ${target}.`;
+                } else {
+                    msg = `OUT! Joiner is out. HOST WINS! 🎉`;
+                    gameOver = true;
+                }
+            } 
+            // NOT OUT
+            else {
+                if (isHostBatting) {
+                    hostScore += hostMove;
+                    msg = `Host scored ${hostMove}. Total: ${hostScore}`;
+                } else {
+                    joinerScore += joinerMove;
+                    if (joinerScore >= target) {
+                        msg = `Joiner chased it! JOINER WINS! 🎉`;
+                        gameOver = true;
+                    } else {
+                        msg = `Joiner scored ${joinerMove}. Needs ${target - joinerScore}.`;
+                    }
+                }
+            }
+
+            const resultData = {
+                type: 'RESULT',
+                hMove: hostMove,
+                jMove: joinerMove,
+                hScore: hostScore,
+                jScore: joinerScore,
+                target: target,
+                msg: msg,
+                gameOver: gameOver
+            };
+
+            // Apply to host immediately, send to joiner
+            applyResult(resultData);
+            conn.send(resultData);
+
+            // Reset moves
+            hostMove = null;
+            joinerMove = null;
+        }
+
+        function applyResult(data) {
+            ui.myHand.innerText = handEmojis[isHost ? data.hMove : data.jMove];
+            ui.oppHand.innerText = handEmojis[isHost ? data.jMove : data.hMove];
+            
+            ui.myScore.innerText = isHost ? data.hScore : data.jScore;
+            ui.oppScore.innerText = isHost ? data.jScore : data.hScore;
+            ui.targetDisp.innerText = data.target || "-";
+
+            ui.status.innerText = data.msg;
+
+            if (!data.gameOver) {
+                setTimeout(() => {
+                    ui.status.innerText = "Next ball! Pick a number.";
+                    ui.myHand.innerText = "✊";
+                    ui.oppHand.innerText = "✊";
+                    ui.controls.style.display = 'grid';
+                }, 2500); // 2.5 second pause between balls
+            }
+        }
+    </script>
+</body>
+</html>
